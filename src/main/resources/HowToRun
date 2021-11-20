@@ -1,0 +1,3 @@
+<!--      在terminal中运行指令mvn jetty:run即可启动项目       服务端口8082-->
+<!--      http://localhost:8082/springmvc/test/hello-   访问-->
+本项目使用jetty-maven-plugin插件运行起来，具体看pom.xml中的说明
