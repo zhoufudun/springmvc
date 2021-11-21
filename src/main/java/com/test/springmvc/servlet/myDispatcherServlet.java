@@ -1,8 +1,6 @@
 package com.test.springmvc.servlet;
 
-import com.test.springmvc.annotation.Controller;
-import com.test.springmvc.annotation.RequestMapping;
-import com.test.springmvc.annotation.RequestParam;
+import com.test.springmvc.annotation.*;
 
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
@@ -11,6 +9,7 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
@@ -27,7 +26,7 @@ public class myDispatcherServlet extends HttpServlet {
      */
     private static final List<String> classList = new ArrayList<>();
     /**
-     * 实例化map，记录有多少个controller
+     * 实例化map，记录类名个类的实例的映射关系
      */
     private static final Map<String, Object> instanceMap = new HashMap<>();
     /**
@@ -119,19 +118,18 @@ public class myDispatcherServlet extends HttpServlet {
                 }
                 System.out.println("parameter values=" + Arrays.toString(values));
                 if (values != null) {
-                    paramValues[i] = Arrays.toString(values);
-//                            .replaceAll("\\[", "").replaceAll("\\]", "")
-//                            .replaceAll(",s", ",");
-//                    System.out.println(paramValues[i]);
+                    //去除多余的【】，例如传入的参数为【zfd】，我们要的字符串是zfd，需要去除去除【】
+                    paramValues[i] = Arrays.toString(values).replaceAll("\\[", "").replaceAll("\\]", "")
+                            .replaceAll(",s", ",");
                 }
             }
-            if(paramName.equals("int") || paramName.equals("Integer")){
-                String[] values=parameterMap.get(parameters[i].getName());
+            if (paramName.equals("int") || paramName.equals("Integer")) {
+                String[] values = parameterMap.get(parameters[i].getName());
                 System.out.println(Arrays.toString(values));//[20]
                 paramValues[i] =
                         //如果是Integer，Arrays.toString(values)的结果是[20]，需要去掉[]
                         Integer.parseInt(Arrays.toString(values).replace("[",
-                                "").replace("]",""));
+                                "").replace("]", ""));
 
             }
         }
@@ -171,11 +169,11 @@ public class myDispatcherServlet extends HttpServlet {
         /**
          * 扫描所有类
          */
-        doScannerClazz();
+        String baseUrl = doScannerClazz();
         /**
          * 获得实例
          */
-        doInstance();
+        doInstance(baseUrl);
         /**
          * 执行mapping
          */
@@ -227,65 +225,205 @@ public class myDispatcherServlet extends HttpServlet {
         System.out.println(instanceMap);
     }
 
-    private void doInstance() {
-        if (!classList.isEmpty()) {
-            for (String clazzName : classList) {
-//                System.out.println("clazzName=" + properties.getProperty("basePackage") + "." + clazzName);
-                try {
-                    Class<?> aClass = Class.forName(properties.getProperty("basePackage") + "." + clazzName);
+    private void doInstance(String baseUrl) {
+        List<String> services = new ArrayList<>();
+        List<String> daos = new ArrayList<>();
+        List<String> controllers = new ArrayList<>();
+        try {
+            if (!classList.isEmpty()) {
+                for (String clazzName : classList) {
+                    if (clazzName.endsWith("Service")) {
+                        services.add(clazzName);
+                    }
+                    if (clazzName.endsWith("Dao")) {
+                        daos.add(clazzName);
+                    }
+                    if (clazzName.endsWith("Controller")) {
+                        controllers.add(clazzName);
+                    }
+
+                }
+
+                //1、先处理service下的类
+                String serviceBaseUrl= (baseUrl + "service/").replace("/", ".");
+                System.out.println("serviceBaseUrl="+serviceBaseUrl);
+                for (String clazzName : services) {
+                    Class<?> aClass =
+                            Class.forName(serviceBaseUrl+clazzName);
+                    if (aClass.isAnnotationPresent(Service.class)) {
+                        Object instance = aClass.newInstance();
+                        Service annotation = aClass.getAnnotation(Service.class);
+                        String value = annotation.value();
+                        if (value.equals("")) {
+                            value = aClass.getSimpleName();
+                            System.out.println("obj.getClass().getSimpleName()=" + value);
+                        }
+                        instanceMap.put(value, instance);
+                    }
+                }
+
+                //2、在处理dao下的类
+                String daoBaseUrl= (baseUrl + "dao/").replace("/", ".");
+                System.out.println("daoBaseUrl="+daoBaseUrl);
+                for (String clazzName : daos) {
+                    Class<?> aClass = Class.forName(daoBaseUrl + clazzName);
+                    if (aClass.isAnnotationPresent(Component.class)) {
+                        Object instance = aClass.newInstance();
+                        Component annotation = aClass.getAnnotation(Component.class);
+                        String value = annotation.value();
+                        if (value.equals("")) {
+                            value = aClass.getSimpleName();
+                            System.out.println("obj.getClass().getSimpleName()=" + value);
+                        }
+                        /**
+                         * 处理Dao中的带有Autowired的service
+                         */
+                        Field[] declaredFields = aClass.getDeclaredFields();
+                        for(Field field:declaredFields){
+                            System.out.println(field.getName());
+                            if(field.isAnnotationPresent(Autowired.class)){
+                                String name = field.getName();
+                                Object fieldInstance = instanceMap.get(name);
+//                                System.out.println(instanceMap);
+                                if(fieldInstance==null){
+                                    System.out.println("can not find bean="+name);
+                                    System.exit(0);
+                                }
+                                //设置带有Autowired注解的实例是那一个对象
+                                field.setAccessible(true);
+                                field.set(instance,fieldInstance);
+                                System.out.println("Autowired success, "+name);
+                                System.out.println(field.get(instance));
+                            }
+                        }
+                        instanceMap.put(value, instance);
+                    }
+
+                }
+
+                //3、最后处理controller下的类
+                String controllerBaseUrl= (baseUrl + "controller/").replace("/", ".");
+                System.out.println("controllerBaseUrl="+controllerBaseUrl);
+                for (String clazzName : controllers) {
+                    Class<?> aClass =
+                            Class.forName(controllerBaseUrl+clazzName);
                     if (aClass.isAnnotationPresent(Controller.class)) {
                         Object instance = aClass.newInstance();
                         Controller annotation = aClass.getAnnotation(Controller.class);
                         String value = annotation.value();
                         if (value.equals("")) {
                             value = aClass.getSimpleName();
-//                            System.out.println("obj.getClass().getSimpleName()=" + value);
                         }
+                        /**
+                         * 处理controller中的带有Autowired的属性
+                         */
+                        Field[] declaredFields = aClass.getDeclaredFields();
+                        for(Field field:declaredFields){
+                            if(field.isAnnotationPresent(Autowired.class)){
+                                String name = field.getName();
+                                Object fieldInstance = instanceMap.get(name);
+//                                System.out.println(instanceMap);
+                                if(fieldInstance==null){
+                                    System.out.println("can not find bean="+name);
+                                    System.exit(0);
+                                }
+                                //设置带有Autowired注解的实例是那一个对象
+                                field.setAccessible(true);
+                                field.set(instance,fieldInstance);
+                                System.out.println("Autowired success, "+name);
+                            }
+                        }
+
                         instanceMap.put(value, instance);
                     }
                     if (aClass.isAnnotationPresent(RequestMapping.class)) {
                         Object newInstance = aClass.newInstance();
                         RequestMapping annotation = aClass.getAnnotation(RequestMapping.class);
-                        String baseUrl = annotation.value();
-                        if (baseUrl.equals("")) {
-                            baseUrl = "/" + newInstance.getClass().getSimpleName();
+                        String url = annotation.value();
+                        if (url.equals("")) {
+                            url = "/" + newInstance.getClass().getSimpleName();
                             System.out.println("clazzName=" + clazzName + " " +
                                     "baseUrl is=" + baseUrl);
                         }
                         System.out.println("clazzName=" + clazzName);
-                        System.out.println("baseUrl=" + baseUrl);
-                        baseURLMap.put(clazzName, baseUrl);
+                        System.out.println("baseUrl=" + url);
+                        baseURLMap.put(clazzName, url);
                     }
-                } catch (ClassNotFoundException | IllegalAccessException | InstantiationException e) {
-                    e.printStackTrace();
                 }
+
             }
+        } catch (ClassNotFoundException | IllegalAccessException | InstantiationException e) {
+            e.printStackTrace();
         }
     }
 
     /**
      * 加载basePackage下的类
      */
-    private void doScannerClazz() {
+    private String doScannerClazz() {
+
         if (properties != null) {
             String basePackage = properties.getProperty("basePackage").trim();
             if (!basePackage.equals("") && basePackage.length() > 0) {
                 basePackage = basePackage.replaceAll("\\.", "/");
                 System.out.println("basePackage:" + basePackage);
-                URL url = this.getClass().getClassLoader().getResource(basePackage);
+                String controllerBaseUrl = basePackage;
+                String serviceBaseUrl = basePackage;
+                String daoBaseUrl = basePackage;
+                //加载顺序service-> dao-> controller,不能变
+                /**
+                 * 1、加载service下的类
+                 */
+                URL url =
+                        this.getClass().getClassLoader().getResource(serviceBaseUrl.replace("*", "service"));
                 if (url != null) {
                     String path = url.getFile();
                     File file = new File(path);
                     String[] list = file.list();
                     for (String f : list) {
-                        System.out.println("load class=" + f);
+                        System.out.println("load service class=" + f);
                         if (f.endsWith(".class")) {
                             classList.add(f.split("\\.")[0]);
                         }
                     }
                 }
+                /**
+                 * 2、加载dao下的类
+                 */
+                url =
+                        this.getClass().getClassLoader().getResource(daoBaseUrl.replace("*", "dao"));
+                if (url != null) {
+                    String path = url.getFile();
+                    File file = new File(path);
+                    String[] list = file.list();
+                    for (String f : list) {
+                        System.out.println("load dao class=" + f);
+                        if (f.endsWith(".class")) {
+                            classList.add(f.split("\\.")[0]);
+                        }
+                    }
+                }
+                /**
+                 * 3、加载controller下的类
+                 */
+                url =
+                        this.getClass().getClassLoader().getResource(controllerBaseUrl.replace("*", "controller"));
+                if (url != null) {
+                    String path = url.getFile();
+                    File file = new File(path);
+                    String[] list = file.list();
+                    for (String f : list) {
+                        System.out.println("load controller class=" + f);
+                        if (f.endsWith(".class")) {
+                            classList.add(f.split("\\.")[0]);
+                        }
+                    }
+                }
+
+                return basePackage.replace("*","");
             }
         }
+        return null;
     }
 
     /**
